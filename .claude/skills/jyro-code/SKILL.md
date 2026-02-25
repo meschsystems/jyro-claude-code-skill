@@ -773,7 +773,107 @@ end
 
 ---
 
-## 19. Edge Cases Quick Reference
+## 19. Standard Library — HTTP Functions (4)
+
+These functions are **always available** in the Jyro CLI. In embedded contexts, the host must explicitly opt in via `.UseHttpFunctions()`. The host may restrict allowed domains, HTTP methods, timeouts, and body sizes — so these functions may throw runtime errors if the host configuration blocks the request.
+
+### InvokeRestMethod(method, url, headers?, body?)
+
+Performs a synchronous HTTP request and returns a structured response object.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `method` | string | Yes | HTTP method: `"GET"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, `"HEAD"`, `"OPTIONS"` (case-insensitive) |
+| `url` | string | Yes | Full URL (`http` or `https` scheme) |
+| `headers` | object | No | Key-value pairs added as request headers |
+| `body` | any | No | Request body. Objects/arrays/numbers/booleans → JSON (`application/json`). Strings → sent as-is (`text/plain`). Set `Content-Type` in headers to override. |
+
+**Returns** an object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `statusCode` | number | HTTP status code (e.g. 200, 404, 500) |
+| `isSuccess` | boolean | `true` for 2xx status codes |
+| `headers` | object | Response headers as lowercase key-value pairs |
+| `body` | any | Auto-parsed as Jyro value when `Content-Type` contains `json`; otherwise returned as a string |
+
+Non-2xx responses do **not** throw — inspect `statusCode` or `isSuccess` to handle errors.
+
+```jyro
+# Simple GET
+var response = InvokeRestMethod("GET", "https://api.example.com/users")
+if response.isSuccess then
+    Data.users = response.body
+else
+    fail "API error: " + response.statusCode
+end
+
+# POST with JSON body
+var payload = {"name": "Alice", "email": "alice@example.com"}
+var response = InvokeRestMethod("POST", "https://api.example.com/users", null, payload)
+Data.newUserId = response.body.id
+
+# With custom headers
+var headers = {"Authorization": "Bearer " + Data.token}
+var response = InvokeRestMethod("GET", "https://api.example.com/me", headers)
+Data.profile = response.body
+
+# PUT with headers and body
+var headers = {
+    "Authorization": "Bearer " + Data.token,
+    "X-Request-Id": NewGuid()
+}
+var body = {"status": "active"}
+var response = InvokeRestMethod("PUT", "https://api.example.com/users/1", headers, body)
+
+# Check specific status codes
+var response = InvokeRestMethod("GET", "https://api.example.com/item/999")
+if response.statusCode == 404 then
+    Data.error = "Item not found"
+elseif not response.isSuccess then
+    fail "Unexpected error: " + response.statusCode
+end
+```
+
+### UrlEncode(value)
+
+Percent-encodes a string for safe use in URLs (RFC 3986). Spaces become `%20`, special characters are escaped.
+
+```jyro
+var encoded = UrlEncode("hello world")         # "hello%20world"
+var url = "https://api.example.com/search?q=" + UrlEncode(Data.searchTerm)
+```
+
+### UrlDecode(value)
+
+Decodes a percent-encoded string. `%20` → space, `%3D` → `=`, etc.
+
+```jyro
+var decoded = UrlDecode("hello%20world")       # "hello world"
+```
+
+### FormEncode(obj)
+
+Encodes an object as an `application/x-www-form-urlencoded` string. Each key-value pair is percent-encoded and joined with `&`.
+
+```jyro
+var params = {"name": "Alice", "age": 30, "city": "New York"}
+var encoded = FormEncode(params)
+# "name=Alice&age=30&city=New%20York"
+
+# As a query string
+var query = FormEncode({"q": Data.search, "page": 1, "limit": 20})
+var url = "https://api.example.com/search?" + query
+
+# As a form POST body
+var formData = FormEncode({"username": Data.user, "password": Data.pass})
+var headers = {"Content-Type": "application/x-www-form-urlencoded"}
+var response = InvokeRestMethod("POST", "https://example.com/login", headers, formData)
+```
+
+---
+
+## 20. Edge Cases Quick Reference
 
 ### Return values on empty/missing data
 
@@ -826,7 +926,7 @@ Split(",a,b,", ",")       # ["", "a", "b", ""]
 
 ---
 
-## 20. Idiomatic Patterns
+## 21. Idiomatic Patterns
 
 ### Input validation with guard clauses
 
@@ -943,7 +1043,7 @@ Data.sanitized = Omit(Data.users, ["password", "token", "secret"])
 
 ---
 
-## 21. Critical Gotchas
+## 22. Critical Gotchas
 
 ### 1. Empty arrays and objects are truthy
 ```jyro
@@ -1097,7 +1197,7 @@ Use `fail` to signal validation failures and rule violations, not for debugging.
 
 ---
 
-## 22. Debugging Strategies
+## 23. Debugging Strategies
 
 ### Add intermediate variables
 ```jyro
@@ -1148,7 +1248,7 @@ Then add edge cases:
 
 ---
 
-## 23. Complete Example
+## 24. Complete Example
 
 ```jyro
 # Order processing script
@@ -1214,7 +1314,7 @@ return "Processed " + count + " orders"
 
 ---
 
-## 24. Quick Reference: ALWAYS / NEVER
+## 25. Quick Reference: ALWAYS / NEVER
 
 **ALWAYS:**
 1. Read all input from `Data`, write all output to `Data`
@@ -1243,3 +1343,198 @@ return "Processed " + count + " orders"
 10. Use `GroupBy` with a lambda — it takes a field name string
 11. Expect `Merge` to deep-merge nested objects — it's shallow
 12. Put `return`/`fail` message on a different line from the keyword
+
+---
+
+## 26. Jyro CLI Reference
+
+Jyro is often embedded in host applications and may not have a CLI available on every system. However, when the `jyro` CLI tool is present (Windows: `jyro.exe`, Linux/macOS: `jyro`), it can be used to compile, run, test, and validate scripts from the terminal. The CLI requires the .NET 10.0 runtime.
+
+### Subcommands
+
+| Command | Alias | Purpose |
+|---------|-------|---------|
+| `compile` | `c` | Compile `.jyro` source to `.jyrx` precompiled binary |
+| `run` | `r` | Execute a `.jyro` script or `.jyrx` binary |
+| `validate` | `v` | Verify a `.jyrx` binary matches a `.jyro` source (SHA-256 hash comparison) |
+| `test` | `t` | Execute a script and compare output to expected JSON |
+
+### File Formats
+
+- **`.jyro`** — Plain-text UTF-8 source files
+- **`.jyrx`** — Precompiled binaries (embed a SHA-256 hash of the original source)
+- All data I/O files are standard JSON
+
+### compile
+
+```bash
+jyro compile -i <script.jyro> [-o <output.jyrx>] [plugin options] [logging options]
+```
+
+| Option | Alias | Description |
+|--------|-------|-------------|
+| `--input-script-file` | `-i` | **(Required)** Path to the `.jyro` source file |
+| `--output-file` | `-o` | Output `.jyrx` path (defaults to input filename with `.jyrx` extension) |
+
+```bash
+jyro compile -i transform.jyro                        # Output: transform.jyrx
+jyro compile -i transform.jyro -o build/transform.jyrx
+```
+
+Diagnostics on failure include error code, line/column, and description:
+```
+[E0012] Line 5, Column 10: Undefined variable 'x'
+```
+
+### run
+
+```bash
+jyro run -i <script.jyro|jyrx> [-d <data.json>] [-o <output.json>] [options]
+```
+
+| Option | Alias | Description |
+|--------|-------|-------------|
+| `--input-script-file` | `-i` | **(Required)** Script or binary to execute |
+| `--data-json-file` | `-d` | JSON file providing the `Data` object (defaults to `{}`) |
+| `--output-json-file` | `-o` | Write JSON output to file (defaults to stdout) |
+| `--config` | `-c` | Path to `jyro.config.json` configuration file |
+| `--stats` | `-s` | Show per-stage pipeline timing on stderr |
+
+```bash
+jyro run -i transform.jyro                              # No input data, output to stdout
+jyro run -i transform.jyro -d input.json                 # With input data
+jyro run -i transform.jyro -d input.json -o result.json  # Output to file
+jyro run -i transform.jyrx -d input.json                 # Run precompiled binary
+```
+
+Output JSON is pretty-printed with two-space indentation. The `.jyrx`/`.jyro` format is auto-detected by extension.
+
+### test
+
+```bash
+jyro test -i <script.jyro|jyrx> [-d <data.json>] -o <expected.json> [options]
+```
+
+| Option | Alias | Description |
+|--------|-------|-------------|
+| `--input-script-file` | `-i` | **(Required)** Script or binary to execute |
+| `--data-json-file` | `-d` | JSON file providing the `Data` object (defaults to `{}`) |
+| `--output-json-file` | `-o` | **(Required)** Expected output JSON to compare against |
+| `--stats` | `-s` | Show per-stage pipeline timing on stderr |
+
+```bash
+jyro test -i transform.jyro -d input.json -o expected.json
+```
+
+On success: `[PASS]: transform.jyro correctly produced output identical to expected.json`
+
+On failure, each mismatch is listed with JSON path, expected value, and actual value:
+```
+[FAIL]: transform.jyro produced output that differs from expected.json
+  3 difference(s) found:
+    $.name: expected Alice, got Bob
+    $.scores[2]: expected 95, got 87
+    $.metadata.version: expected 2.0, got (missing)
+```
+
+Comparison is semantic: object property order is ignored, floating-point tolerance is applied (relative 1e-10, absolute 1e-15), and `42` equals `42.0`. Console log output goes to stderr so it doesn't interfere with PASS/FAIL results.
+
+### validate
+
+```bash
+jyro validate --compiled <file.jyrx> --raw <file.jyro> [logging options]
+```
+
+Verifies that a `.jyrx` binary was compiled from a specific `.jyro` source by comparing embedded SHA-256 hashes.
+
+```bash
+jyro validate --compiled transform.jyrx --raw transform.jyro
+```
+
+### Plugin Options (compile, run, test)
+
+| Option | Alias | Description |
+|--------|-------|-------------|
+| `--plugin` | `-p` | Comma-separated paths to plugin assembly DLLs |
+| `--plugin-directory` | `-pd` | Comma-separated directories to search for DLLs (top-level only) |
+| `--plugin-recursive` | `-pr` | Comma-separated directories to search recursively for DLLs |
+
+```bash
+jyro run -i script.jyro -p MyPlugin.dll
+jyro run -i script.jyro -p Plugin1.dll,Plugin2.dll
+jyro compile -i script.jyro -pr C:\Plugins,D:\MorePlugins
+```
+
+If a script calls functions from external plugins, those plugins must be provided at both compile time and run time.
+
+### Logging Options (all subcommands)
+
+| Option | Alias | Default | Description |
+|--------|-------|---------|-------------|
+| `--verbosity` | `-v` | `Information` | Min log level: `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, `None` |
+| `--quiet` | `-q` | | Suppress all logging |
+| `--console-logging` | | `true` | Enable/disable console logging (`true`/`false`) |
+| `--log-file` | `-l` | | Append log output to file |
+| `--log-format` | | `text` | Log format: `text` or `json` (JSON Lines) |
+
+```bash
+jyro run -i transform.jyro -v Debug -l run.log
+jyro run -i transform.jyro -q                    # Silent execution
+jyro test -i script.jyro -o expected.json 2>test.log  # Redirect test logs
+```
+
+### Log() Host Function (run, test only)
+
+During `run` and `test` execution, scripts can write to the logging pipeline via a `Log` host function:
+
+```jyro
+Log("info", "Processing started")
+Log("debug", "Record count: " + Length(Data.items))
+Log("error", "Unexpected null in field 'name'")
+```
+
+Accepted levels: `trace`, `debug`, `info` (or `information`), `warn` (or `warning`), `error`, `critical`. Messages are prefixed with `[Script]` in log output. `Log` is **not available** during `compile` or `validate`.
+
+### Configuration (run command only)
+
+The `run` command supports layered configuration (lowest to highest priority):
+
+1. **Config file** (`jyro.config.json`) — searched in: CWD → app data dir → home dir
+2. **Environment variables** — prefixed with `JYRO_` (e.g., `JYRO_LogLevel=Debug`)
+3. **Command-line arguments** — highest priority, always wins
+
+Example `jyro.config.json`:
+```json
+{
+  "InputScriptFile": "transform.jyro",
+  "DataJsonFile": "data.json",
+  "OutputJsonFile": "output.json",
+  "LogLevel": "Information",
+  "Stats": false
+}
+```
+
+### Pipeline Statistics (--stats)
+
+When `-s` is passed to `run` or `test`, per-stage timing is printed to stderr:
+
+```
+Pipeline Statistics:
+  ----------------------------
+  Parse:           1.23 ms
+  Validate:        0.45 ms
+  Link:            0.12 ms
+  Compile:         0.89 ms
+  Execute:         2.34 ms
+  ----------------------------
+  Total:           5.03 ms
+```
+
+For `.jyrx` files, only Deserialize → Compile → Execute stages are shown.
+
+### Exit Codes (all subcommands)
+
+| Code | Meaning |
+|------|---------|
+| `0` | Operation succeeded |
+| `1` | Error: file not found, compilation/execution failed, or comparison mismatch |
