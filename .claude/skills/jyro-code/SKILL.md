@@ -693,7 +693,7 @@ var eligible = Where(Data.users, u => u.age >= 18 and u.active and u.balance > 0
 
 ---
 
-## 17. Standard Library — Utility Functions (14)
+## 17. Standard Library — Utility Functions (15)
 
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
@@ -711,6 +711,7 @@ var eligible = Where(Data.users, u => u.age >= 18 and u.active and u.balance > 0
 | `Base64Decode(s)` | string | string | Decode from Base64 |
 | `FromJson(s)` | string | any | Parse JSON; null on error |
 | `ToJson(v)` | any | string | Serialize to JSON |
+| `Sleep(ms)` | number | null | Pause execution for ms milliseconds. Must be a non-negative integer. Wall clock limit remains active during sleep. No-op in WASM. |
 
 **CRITICAL — `Merge` takes an array of objects**, not variadic arguments:
 
