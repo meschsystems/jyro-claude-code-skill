@@ -693,7 +693,7 @@ var eligible = Where(Data.users, u => u.age >= 18 and u.active and u.balance > 0
 
 ---
 
-## 17. Standard Library — Utility Functions (15)
+## 17. Standard Library — Utility Functions (16)
 
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
@@ -706,6 +706,7 @@ var eligible = Where(Data.users, u => u.age >= 18 and u.active and u.balance > 0
 | `HasProperty(obj, key)` | object, string | boolean | Property exists? |
 | `Merge(arr)` | array of objects | object | Merge objects; later overrides earlier |
 | `Clone(v)` | any | any | Deep clone |
+| `Diff(obj1, obj2)` | object, object | object | Compare two objects; returns `{added: {...}, removed: {...}, changed: {key: {from, to}, ...}}` |
 | `NewGuid()` | (none) | string | Lowercase hyphenated GUID |
 | `Base64Encode(s)` | string | string | Encode to Base64 |
 | `Base64Decode(s)` | string | string | Decode from Base64 |
@@ -740,6 +741,26 @@ var result = Merge([a, b])
 **`Coalesce` also takes an array:**
 ```jyro
 var value = Coalesce([Data.primary, Data.fallback, "default"])
+```
+
+**`Diff` performs a shallow (top-level) comparison.** Nested objects and arrays are compared using deep equality, but reported as atomic `{from, to}` pairs. To diff nested objects, call `Diff` again on the inner values. Two null values for the same key are treated as equal (no change reported). Keys present in both with equal values are omitted entirely.
+
+```jyro
+var old = {name: "Alice", age: 30, city: "NYC"}
+var updated = {name: "Alice", age: 31, email: "a@b.com"}
+var d = Diff(old, updated)
+# d.added   = {email: "a@b.com"}
+# d.removed = {city: "NYC"}
+# d.changed = {age: {from: 30, to: 31}}
+# "name" is omitted — it's identical in both
+
+# Drill into nested changes
+var s1 = {user: {name: "Alice", role: "admin"}}
+var s2 = {user: {name: "Alice", role: "editor"}}
+var topDiff = Diff(s1, s2)
+# topDiff.changed.user = {from: {name: "Alice", role: "admin"}, to: {name: "Alice", role: "editor"}}
+var userDiff = Diff(topDiff.changed.user.from, topDiff.changed.user.to)
+# userDiff.changed = {role: {from: "admin", to: "editor"}}
 ```
 
 ---
