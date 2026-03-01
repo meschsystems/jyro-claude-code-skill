@@ -547,7 +547,7 @@ var num = RegexMatch(text, "[0-9]+")
 
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
-| `Abs(n)` | number | number | Absolute value |
+| `Absolute(n)` | number | number | Absolute value |
 | `Floor(n)` | number | number | Round down |
 | `Ceiling(n)` | number | number | Round up |
 | `Min(arr)` | array | number or null | Minimum number in array; null if no numbers |
@@ -769,7 +769,7 @@ var userDiff = Diff(topDiff.changed.user.from, topDiff.changed.user.to)
 
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
-| `ValidateRequired(obj, fields)` | object, array | object | Returns `{valid: boolean, errors: array}` |
+| `ValidateRequired(obj, fields)` | object, array | object | Returns `{valid: boolean, errors: array}`. Fields fail if missing, null, or empty/whitespace strings |
 | `ValidateSchema(data, schema)` | any, object | array | Validate against JSON Schema; returns error array |
 
 ```jyro
