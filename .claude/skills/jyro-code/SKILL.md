@@ -16,12 +16,14 @@ Jyro is an imperative, optionally-typed scripting language designed for secure, 
 - **Sandboxed**: No file I/O, network access, or system calls
 - **Resource-limited**: Enforced limits on execution time, statements, loops, and stack depth
 - **Immutable stdlib**: All standard library functions return new values — they never mutate their inputs
+- **User-defined functions**: Named, reusable, pure functions with explicit parameters — no access to `Data`
+- **Discriminated unions**: Declare closed sets of tagged variants with compile-time exhaustive `match`
 
 ---
 
 ## 1. Program Structure and the Data Context
 
-A Jyro script is a flat sequence of statements executed top-to-bottom. There are no modules, imports, or user-defined named functions.
+A Jyro script is a sequence of statements executed top-to-bottom. There are no modules or imports. User-defined functions and union declarations are hoisted — they can be called before they appear in source.
 
 **The `Data` object** is the sole input/output mechanism:
 
@@ -390,39 +392,69 @@ Each `case` block is implicitly terminated by the next `case`, `default`, or the
 - `break` — exits the current (innermost) loop
 - `continue` — skips to the next iteration
 
-### return and fail
+### return, exit, and fail
 
-Both terminate the script immediately. They accept an optional **string message** on the **same line**.
+Three keywords control termination. Each has a distinct meaning and valid scope:
+
+| Keyword | Effect | Valid where |
+|---------|--------|-------------|
+| `return` | Return a value from a function | Inside functions only |
+| `exit` | Terminate the script cleanly (success) | Anywhere |
+| `fail` | Terminate the script with an error (failure) | Anywhere |
 
 ```jyro
-return                              # Clean exit, no message
-return "Processing complete"        # Clean exit with message
+# At the top level — use exit and fail
+exit                                # Clean exit, no message
+exit "Processing complete"          # Clean exit with message
 fail                                # Failure exit, default message
 fail "Invalid input"                # Failure exit with message
+
+# Inside functions — use return
+func Double(x: number)
+    return x * 2                    # Returns value to caller
+end
+
+func MaybeDouble(x)
+    if x is not number then
+        return                      # Bare return — returns null
+    end
+    return x * 2
+end
 ```
 
-| Keyword | Script Succeeds? | Message Severity |
-|---------|-----------------|------------------|
-| `return` | Yes | Info (if message) |
-| `fail` | No | Error |
+`exit` and `fail` terminate the **entire script**, even from inside a function — they don't just return from the function:
 
-**CRITICAL**: The message must be on the **same line** as the keyword:
+```jyro
+func Validate(x)
+    if x is null then
+        exit "missing required value"   # terminates the script
+    end
+    if x < 0 then
+        fail "value must be positive"   # terminates with error
+    end
+    return x * 2
+end
+```
+
+Using `return` outside a function is an error — use `exit` instead.
+
+**CRITICAL**: The message for `exit`/`fail` must be on the **same line** as the keyword:
 ```jyro
 # CORRECT
-return "Done"
+exit "Done"
 
 # WRONG — "Done" is a separate statement, not a message
-return
+exit
 "Done"
 ```
 
-`Data` is **always** returned to the host with all mutations, regardless of whether the script returns or fails.
+`Data` is **always** returned to the host with all mutations, regardless of whether the script exits or fails.
 
 ---
 
 ## 9. Lambda Expressions
 
-Lambdas are anonymous functions used as arguments to higher-order stdlib functions.
+Lambdas are anonymous inline expressions used as arguments to higher-order stdlib functions.
 
 ```jyro
 x => x * 2                          # Single parameter
@@ -430,7 +462,7 @@ x => x * 2                          # Single parameter
 (acc, item) => acc + item.price      # Used with Reduce
 ```
 
-The body is a **single expression** (not a block of statements). Closures capture outer variables.
+The body is a **single expression** (not a block of statements). Lambdas capture outer variables (closures) and **can** access `Data`.
 
 ```jyro
 var threshold = 100
@@ -441,9 +473,356 @@ var evens = Where(Data.numbers, x => x % 2 == 0)
 var total = Reduce(Data.numbers, (acc, x) => acc + x, 0)
 ```
 
+**Lambdas vs. user-defined functions** — use the right tool:
+
+| | Functions | Lambdas |
+|-|-----------|---------|
+| **Syntax** | `func Name(params) ... end` | `x => expr` |
+| **Body** | Multiple statements | Single expression |
+| **Named** | Yes | No |
+| **Captures variables** | No | Yes |
+| **Accesses Data** | No | Yes |
+| **Called standalone** | Yes | No (passed to higher-order functions) |
+
+Use a function when you have multi-statement logic to call by name from multiple places. Use a lambda for short inline expressions with `Map`, `Where`, `Reduce`, etc. They compose naturally — a lambda can call a user-defined function:
+
+```jyro
+func ScoreOrder(order)
+    var base = order.amount * 10
+    if order.isPriority then
+        return base * 1.5
+    end
+    return base
+end
+
+var highScores = Where(Data.orders, o => ScoreOrder(o) > 100)
+```
+
 ---
 
-## 10. Property and Index Access
+## 10. User-Defined Functions
+
+User-defined functions let you extract reusable, named logic with explicit parameters. They are **pure** — they cannot access `Data` or capture outer variables.
+
+### Declaration
+
+```jyro
+func Name(param1, param2: type)
+    # body (any statements: var, if, while, for, return, etc.)
+end
+```
+
+Functions must be declared at the **top level** — not inside `if`, loops, or other functions. Function names must be unique and cannot shadow built-in or host-provided functions.
+
+### Parameters
+
+Parameters are listed by name with optional type hints. Type hints coerce arguments at call time (same as typed `var`). All parameters are **required** — every call must supply exactly the declared number of arguments.
+
+```jyro
+func Add(a: number, b: number)
+    return a + b
+end
+
+func Label(value)
+    return "Value: " + ToString(value)
+end
+```
+
+Parameter names must be unique within a function. `Data` cannot be used as a parameter name.
+
+### Return values
+
+`return` sends a value back to the caller. A bare `return` (no expression) returns `null`. If the body reaches `end` without a `return`, the function returns `null`.
+
+```jyro
+func MaybeDouble(x)
+    if x is not number then
+        return              # returns null
+    end
+    return x * 2
+end
+```
+
+### Calling functions
+
+Call user-defined functions the same way as built-in functions — by name with arguments in parentheses. Function calls are expressions and work anywhere an expression is valid:
+
+```jyro
+Data.tax = CalculateTax(Data.subtotal, Data.taxRate)
+
+if IsValid(Data.amount) then
+    Data.status = "ok"
+end
+
+var total = Reduce(Data.values, (sum, v) => sum + Double(v), 0)
+```
+
+### Function hoisting
+
+Functions can be called before they are declared. All function declarations are visible throughout the entire script:
+
+```jyro
+Data.result = Process(Data.input)    # Works — Process is hoisted
+
+func Process(x)
+    return x * 2
+end
+```
+
+Functions can call each other (mutual recursion):
+
+```jyro
+func IsEven(n: number)
+    if n == 0 then return true end
+    return IsOdd(n - 1)
+end
+
+func IsOdd(n: number)
+    if n == 0 then return false end
+    return IsEven(n - 1)
+end
+```
+
+### No Data, no closures
+
+Functions **cannot** access `Data` — pass values as arguments. Functions **cannot** see variables from the enclosing script — every dependency comes through the parameter list.
+
+```jyro
+# WRONG — compiler error
+func Bad()
+    return Data.value
+end
+
+# RIGHT — pass as argument
+func Good(value)
+    return value * 2
+end
+Data.result = Good(Data.value)
+
+# WRONG — compiler error (no closures)
+var multiplier = 3
+func Scale(x)
+    return x * multiplier
+end
+
+# RIGHT — pass as parameter
+func Scale(x, multiplier)
+    return x * multiplier
+end
+```
+
+### exit and fail inside functions
+
+`exit` terminates the entire script, even from inside a function. `fail` does the same with an error. Neither just returns from the function — they stop everything:
+
+```jyro
+func RequirePositive(x, name)
+    if x is not number then
+        fail name + " must be a number"
+    end
+    if x <= 0 then
+        fail name + " must be positive"
+    end
+    return x
+end
+
+var amount = RequirePositive(Data.amount, "amount")
+var rate = RequirePositive(Data.rate, "rate")
+Data.result = amount * rate
+```
+
+### Recursion
+
+Functions can call themselves. Jyro enforces a maximum call depth to prevent infinite recursion:
+
+```jyro
+func Factorial(n: number)
+    if n <= 1 then
+        return 1
+    end
+    return n * Factorial(n - 1)
+end
+
+Data.result = Factorial(5)    # 120
+```
+
+---
+
+## 11. Discriminated Unions
+
+Discriminated unions declare a closed set of named shapes (variants) that a value can take. The `match` statement/expression destructures those variants with **compile-time exhaustiveness checking** — if you forget a case, the compiler rejects the script.
+
+### Declaring a union
+
+```jyro
+union Shape
+    Circle(radius: number)
+    Rect(width: number, height: number)
+end
+```
+
+Rules:
+- Unions must be declared at the **top level** — not inside `if`, loops, or functions
+- Variant names must be **globally unique** across all unions (they register as constructor functions)
+- Variant names cannot collide with built-in functions or user-defined functions
+- Field type hints are optional — untyped fields accept any value
+
+### Variants without fields
+
+Variants with no fields act as enum values. Empty parentheses are required at construction:
+
+```jyro
+union Status
+    Active()
+    Suspended()
+    Terminated()
+end
+
+var s = Active()
+```
+
+### Creating values
+
+Each variant becomes a constructor function. Call it like any other function — all arguments are required:
+
+```jyro
+var c = Circle(10)         # { "_variant": "Circle", "radius": 10 }
+var r = Rect(4, 5)         # { "_variant": "Rect", "width": 4, "height": 5 }
+```
+
+Under the surface, constructors create plain objects with a `_variant` tag. The host sees ordinary JSON.
+
+### Destructuring with match
+
+`match` examines a union value and branches by variant. Each `case` names a variant and binds its fields to local variables by position:
+
+```jyro
+match shape do
+    case Circle(r) then
+        Data.description = "Circle with radius " + ToString(r)
+    case Rect(w, h) then
+        Data.description = ToString(w) + " x " + ToString(h) + " rectangle"
+end
+```
+
+Binding names don't have to match field names — they're positional. `case Circle(r)` maps `r` to the `radius` field because `radius` is the first field of `Circle`.
+
+For zero-field variants, omit the parentheses in the case:
+
+```jyro
+match state do
+    case On then
+        Data.label = "Enabled"
+    case Off then
+        Data.label = "Disabled"
+end
+```
+
+### Exhaustiveness
+
+Every `match` must cover **every** variant of the union. Missing a variant is a compile-time error. There is **no `default`** in `match` — use `switch` with `default` for open-ended dispatch.
+
+```jyro
+# Error: non-exhaustive match — missing variants: South, West
+match heading do
+    case North() then
+        Data.y = Data.y + 1
+    case East() then
+        Data.x = Data.x + 1
+end
+```
+
+### Match expressions
+
+`match` can also appear as an expression where each arm is a single expression:
+
+```jyro
+var label = match order do
+    case Pending then "Awaiting processing"
+    case Shipped(tracking, carrier) then carrier + ": " + tracking
+end
+
+func Area(shape)
+    return match shape do
+        case Circle(r) then 3.14159 * r * r
+        case Rect(w, h) then w * h
+    end
+end
+```
+
+Both statement and expression match require exhaustive coverage.
+
+### Practical patterns
+
+**Result types** — structured success/failure:
+
+```jyro
+union Result
+    Ok(value)
+    Error(message: string)
+end
+
+func Divide(a: number, b: number)
+    if b == 0 then
+        return Error("Division by zero")
+    end
+    return Ok(a / b)
+end
+
+match Divide(Data.a, Data.b) do
+    case Ok(v) then
+        Data.quotient = v
+    case Error(msg) then
+        Data.error = msg
+end
+```
+
+**State machines** — each state carries only relevant data:
+
+```jyro
+union OrderStatus
+    Pending()
+    Processing(startedAt: string)
+    Shipped(trackingNumber: string, carrier: string)
+    Delivered(deliveredAt: string)
+    Cancelled(reason: string)
+end
+
+func StatusLabel(status)
+    return match status do
+        case Pending then "Awaiting processing"
+        case Processing(started) then "Processing since " + started
+        case Shipped(tracking, carrier) then carrier + " - " + tracking
+        case Delivered(when) then "Delivered " + when
+        case Cancelled(reason) then "Cancelled: " + reason
+    end
+end
+```
+
+**Recursive unions** — tree structures:
+
+```jyro
+union Expr
+    Literal(value: number)
+    Add(left, right)
+    Mul(left, right)
+end
+
+func Eval(expr)
+    return match expr do
+        case Literal(v) then v
+        case Add(a, b) then Eval(a) + Eval(b)
+        case Mul(a, b) then Eval(a) * Eval(b)
+    end
+end
+
+Data.result = Eval(Mul(Add(Literal(2), Literal(3)), Literal(4)))
+# result = 20
+```
+
+---
+
+## 12. Property and Index Access
 
 ```jyro
 obj.name                 # Property access (dot notation)
@@ -462,7 +841,7 @@ str[0]                   # String character access (returns single-char string)
 
 ---
 
-## 11. Standard Library — String Functions (18)
+## 13. Standard Library — String Functions (18)
 
 All function names are **PascalCase** and **case-sensitive**.
 
@@ -506,7 +885,7 @@ var num = RegexMatch(text, "[0-9]+")
 
 ---
 
-## 12. Standard Library — Array Functions (23)
+## 14. Standard Library — Array Functions (23)
 
 **All array functions return new arrays — they never mutate the input.**
 
@@ -543,7 +922,7 @@ var num = RegexMatch(text, "[0-9]+")
 
 ---
 
-## 13. Standard Library — Math Functions (14)
+## 15. Standard Library — Math Functions (14)
 
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
@@ -576,7 +955,7 @@ var minimum = Min([a, b])
 
 ---
 
-## 14. Standard Library — Date/Time Functions (7)
+## 16. Standard Library — Date/Time Functions (7)
 
 All dates are strings in ISO 8601 format (`yyyy-MM-ddTHH:mm:ss.fffZ`).
 
@@ -605,7 +984,7 @@ var formatted = FormatDate(Now(), "yyyy-MM-dd HH:mm")
 
 ---
 
-## 15. Standard Library — Query Functions (8)
+## 17. Standard Library — Query Functions (8)
 
 Field-based operations on arrays of objects. No lambdas — use string field names and operator strings.
 
@@ -640,7 +1019,7 @@ var sanitized = Omit(Data.users, ["password", "token"])
 
 ---
 
-## 16. Standard Library — Lambda / Higher-Order Functions (8)
+## 18. Standard Library — Lambda / Higher-Order Functions (8)
 
 These take lambda expressions as callbacks.
 
@@ -693,7 +1072,7 @@ var eligible = Where(Data.users, u => u.age >= 18 and u.active and u.balance > 0
 
 ---
 
-## 17. Standard Library — Utility Functions (16)
+## 19. Standard Library — Utility Functions (16)
 
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
@@ -765,7 +1144,7 @@ var userDiff = Diff(topDiff.changed.user.from, topDiff.changed.user.to)
 
 ---
 
-## 18. Standard Library — Schema Validation (2)
+## 20. Standard Library — Schema Validation (2)
 
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
@@ -795,7 +1174,7 @@ end
 
 ---
 
-## 19. Standard Library — HTTP Functions (4)
+## 21. Standard Library — HTTP Functions (4)
 
 These functions are **always available** in the Jyro CLI. In embedded contexts, the host must explicitly opt in via `.UseHttpFunctions()`. The host may restrict allowed domains, HTTP methods, timeouts, and body sizes — so these functions may throw runtime errors if the host configuration blocks the request.
 
@@ -895,7 +1274,7 @@ var response = InvokeRestMethod("POST", "https://example.com/login", headers, fo
 
 ---
 
-## 20. Edge Cases Quick Reference
+## 22. Edge Cases Quick Reference
 
 ### Return values on empty/missing data
 
@@ -948,7 +1327,7 @@ Split(",a,b,", ",")       # ["", "a", "b", ""]
 
 ---
 
-## 21. Idiomatic Patterns
+## 23. Idiomatic Patterns
 
 ### Input validation with guard clauses
 
@@ -959,7 +1338,7 @@ end
 
 if Length(Data.items) == 0 then
     Data.result = []
-    return "No items to process"
+    exit "No items to process"
 end
 
 if Data.email is null or Data.email == "" then
@@ -1021,7 +1400,7 @@ Data.count = Length(Data.items)
 Data.total = Sum(Select(Data.items, "price"))
 Data.hasItems = Length(Data.items) > 0
 Data.uniqueCategories = Distinct(Select(Data.items, "category"))
-return
+exit
 ```
 
 ### Chained transforms
@@ -1063,9 +1442,81 @@ Data.response = Project(activeUsers, ["id", "name", "email"])
 Data.sanitized = Omit(Data.users, ["password", "token", "secret"])
 ```
 
+### Validation helpers with functions
+
+Extract repeated validation logic into reusable functions. `fail` inside a function terminates the entire script, making functions natural guard clauses:
+
+```jyro
+func RequireString(value, fieldName)
+    if value is not string or value == "" then
+        fail fieldName + " is required"
+    end
+    return value
+end
+
+func RequireNumber(value, fieldName, min, max)
+    if value is not number then
+        fail fieldName + " must be a number"
+    end
+    if value < min or value > max then
+        fail fieldName + " must be between " + ToString(min) + " and " + ToString(max)
+    end
+    return value
+end
+
+var name = RequireString(Data.name, "name")
+var age = RequireNumber(Data.age, "age", 0, 150)
+Data.record = { "name": name, "age": age }
+```
+
+### Composing functions with lambdas
+
+Functions define the logic; lambdas plug them into higher-order operations:
+
+```jyro
+func IsEligible(customer)
+    if customer.age < 18 then return false end
+    if customer.status != "active" then return false end
+    if customer.balance < 0 then return false end
+    return true
+end
+
+var eligible = Where(Data.customers, c => IsEligible(c))
+Data.eligibleCount = Length(eligible)
+```
+
+### Union-based result handling
+
+Use a Result union instead of returning null on error:
+
+```jyro
+union Result
+    Ok(value)
+    Error(message: string)
+end
+
+func ParseAge(input)
+    if input is not number then
+        return Error("Age must be a number")
+    end
+    if input < 0 or input > 150 then
+        return Error("Age out of range")
+    end
+    return Ok(input)
+end
+
+var result = ParseAge(Data.age)
+match result do
+    case Ok(v) then
+        Data.age = v
+    case Error(msg) then
+        Data.errors = Append(Data.errors ?? [], msg)
+end
+```
+
 ---
 
-## 22. Critical Gotchas
+## 24. Critical Gotchas
 
 ### 1. Empty arrays and objects are truthy
 ```jyro
@@ -1189,14 +1640,14 @@ GroupBy(arr, "category")
 RegexMatch(text, "[0-9]+")
 ```
 
-### 15. return/fail message must be on the same line
+### 15. exit/fail message must be on the same line
 ```jyro
 # WRONG:
-return
+exit
 "message"    # This is a separate statement
 
 # RIGHT:
-return "message"
+exit "message"
 ```
 
 ### 16. For loop bounds are exclusive
@@ -1217,9 +1668,102 @@ ToUpper("hello")
 ### 19. `fail` is for business logic, not programming errors
 Use `fail` to signal validation failures and rule violations, not for debugging.
 
+### 20. `return` is only for functions — use `exit` at the top level
+```jyro
+# WRONG — return outside a function is a compiler error
+return "Done"
+
+# RIGHT — use exit at the top level
+exit "Done"
+
+# return is only valid inside func ... end
+func Double(x: number)
+    return x * 2
+end
+```
+
+### 21. Functions cannot access `Data` or outer variables
+```jyro
+# WRONG — compiler error
+func Bad()
+    return Data.value
+end
+
+# WRONG — compiler error (no closures)
+var x = 10
+func AlsoBad(y)
+    return y * x
+end
+
+# RIGHT — pass everything as arguments
+func Good(value, multiplier)
+    return value * multiplier
+end
+Data.result = Good(Data.value, 10)
+```
+
+### 22. Functions must be at the top level — not inside if/loops/functions
+```jyro
+# WRONG — compiler error
+if Data.mode == "advanced" then
+    func Helper(x)
+        return x * 2
+    end
+end
+
+# RIGHT — declare at top level, call conditionally
+func Helper(x)
+    return x * 2
+end
+if Data.mode == "advanced" then
+    Data.result = Helper(Data.value)
+end
+```
+
+### 23. Variant names are globally unique — no two unions can share a variant name
+```jyro
+# WRONG — Circle is duplicated
+union Shape
+    Circle(r: number)
+end
+union Thing
+    Circle(r: number)    # Error: variant 'Circle' already defined
+end
+```
+
+### 24. `match` has no `default` — every variant must be handled
+```jyro
+# WRONG — compiler error: non-exhaustive match
+match shape do
+    case Circle(r) then
+        Data.area = 3.14159 * r * r
+end
+
+# RIGHT — handle all variants
+match shape do
+    case Circle(r) then
+        Data.area = 3.14159 * r * r
+    case Rect(w, h) then
+        Data.area = w * h
+end
+```
+
+### 25. Match bindings are positional, not by name
+```jyro
+union Pair
+    Pair(first: string, second: string)
+end
+
+match p do
+    # 'a' gets the first field, 'b' gets the second — names don't matter
+    case Pair(a, b) then
+        Data.result = a + " " + b
+end
+```
+
 ---
 
-## 23. Debugging Strategies
+## 25. Debugging Strategies
 
 ### Add intermediate variables
 ```jyro
@@ -1270,7 +1814,7 @@ Then add edge cases:
 
 ---
 
-## 24. Complete Example
+## 26. Complete Example
 
 ```jyro
 # Order processing script
@@ -1285,7 +1829,7 @@ end
 if Length(Data.orders) == 0 then
     Data.summary = {count: 0, total: 0}
     Data.processed = []
-    return "No orders to process"
+    exit "No orders to process"
 end
 
 # 2. Quick validation
@@ -1331,12 +1875,12 @@ Data.processed = SortByField(processed, "total", "desc")
 # 6. Create export view
 Data.export = Project(Data.processed, ["id", "amount", "total", "processedAt"])
 
-return "Processed " + count + " orders"
+exit "Processed " + count + " orders"
 ```
 
 ---
 
-## 25. Quick Reference: ALWAYS / NEVER
+## 27. Quick Reference: ALWAYS / NEVER
 
 **ALWAYS:**
 1. Read all input from `Data`, write all output to `Data`
@@ -1347,10 +1891,14 @@ return "Processed " + count + " orders"
 6. Create intermediate objects for nested property assignment
 7. Capture return values from array functions — they return new arrays
 8. Use `fail` with a message for validation errors
-9. Put `return`/`fail` messages on the same line as the keyword
+9. Put `exit`/`fail` messages on the same line as the keyword
 10. Use `WhereByField`/`FindByField` for simple field comparisons, `Where`/`Find` for complex logic
 11. Pass arrays to `Sum`, `Min`, `Max`, `Average`, `Merge`, `Coalesce`
 12. Use `Select` to extract field values before aggregation
+13. Use `exit` (not `return`) for top-level script termination
+14. Use `return` inside functions to return values to the caller
+15. Pass all needed data into functions as parameters — they can't see `Data` or outer variables
+16. Handle every variant in a `match` — the compiler enforces exhaustiveness
 
 **NEVER:**
 1. Declare a variable named `Data`
@@ -1359,16 +1907,21 @@ return "Processed " + count + " orders"
 4. Use `\d`, `\w`, `\s` in regex — they cause **parse errors**; use `[0-9]`, `[a-zA-Z0-9_]`, `[ \t\n\r]`
 5. Rely on empty arrays/objects being falsy — they are truthy
 6. Forget to capture return values from immutable functions (`Sort`, `Append`, etc.)
-7. Forget `then` after `if`/`elseif`/`case`/`default`, `do` after `while`/`for`/`foreach`/`switch`, or `end` to close compound statements
+7. Forget `then` after `if`/`elseif`/`case`/`default`, `do` after `while`/`for`/`foreach`/`switch`/`match`, or `end` to close compound statements
 8. Use string interpolation — it doesn't exist; use `+` concatenation
 9. Pass multiple arguments to `Sum`, `Min`, `Max`, `Merge` — they take arrays
 10. Use `GroupBy` with a lambda — it takes a field name string
 11. Expect `Merge` to deep-merge nested objects — it's shallow
-12. Put `return`/`fail` message on a different line from the keyword
+12. Put `exit`/`fail` message on a different line from the keyword
+13. Use `return` outside a function — it's a compiler error; use `exit` instead
+14. Access `Data` or outer variables inside a `func` — pass them as parameters
+15. Declare functions inside `if`, loops, or other functions — they must be top-level
+16. Use `default` in `match` — it doesn't exist; every variant must be handled explicitly
+17. Reuse a variant name across multiple unions — variant names must be globally unique
 
 ---
 
-## 26. Jyro CLI Reference
+## 28. Jyro CLI Reference
 
 Jyro is often embedded in host applications and may not have a CLI available on every system. However, when the `jyro` CLI tool is present (Windows: `jyro.exe`, Linux/macOS: `jyro`), it can be used to compile, run, test, and validate scripts from the terminal. The CLI requires the .NET 10.0 runtime.
 
