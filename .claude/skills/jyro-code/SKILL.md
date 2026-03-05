@@ -839,6 +839,31 @@ str[0]                   # String character access (returns single-char string)
 - Properties and indexes are assignable: `obj.name = "Bob"`, `arr[0] = 99`
 - Keywords are valid as property names: `Data.for = "x"`, `Data.number = 42`
 
+### delete — removing object properties
+
+The `delete` keyword removes a property from an object entirely — the key is gone, not just set to null.
+
+```jyro
+Data.user = {name: "alice", password: "secret", role: "admin"}
+
+delete Data.user.password           # Property is completely removed
+# Data.user is now {name: "alice", role: "admin"}
+
+# Dynamic key via bracket access
+var field = "role"
+delete Data.user[field]             # Removes "role" from Data.user
+
+# Nested — removes the innermost property
+delete Data.user.name               # Data.user is now {}
+```
+
+**Rules:**
+- `delete` only works on property access (`obj.key`) and bracket access (`obj["key"]`)
+- `delete` on a non-existent property is a no-op (no error)
+- `delete` on a bare variable (`delete myVar`) is a **compile-time error** — variables cannot be deleted
+- `delete Data` is a **compile-time error** — `Data` itself cannot be removed
+- The target expression must be on the **same line** as `delete`
+
 ---
 
 ## 13. Standard Library — String Functions (18)
@@ -1443,6 +1468,23 @@ Data.response = Project(activeUsers, ["id", "name", "email"])
 Data.sanitized = Omit(Data.users, ["password", "token", "secret"])
 ```
 
+### Scrubbing sensitive fields from Data
+
+Use `delete` to remove properties directly from `Data` — this is the only way to completely remove keys from the output, since `Data` cannot be reassigned:
+
+```jyro
+# Remove sensitive fields before returning to host
+delete Data.password
+delete Data.token
+delete Data.user.secret
+
+# Dynamic scrubbing
+var sensitiveFields = ["ssn", "creditCard", "pin"]
+foreach field in sensitiveFields do
+    delete Data[field]
+end
+```
+
 ### Validation helpers with functions
 
 Extract repeated validation logic into reusable functions. `fail` inside a function terminates the entire script, making functions natural guard clauses:
@@ -1900,6 +1942,7 @@ exit "Processed " + count + " orders"
 14. Use `return` inside functions to return values to the caller
 15. Pass all needed data into functions as parameters — they can't see `Data` or outer variables
 16. Handle every variant in a `match` — the compiler enforces exhaustiveness
+17. Use `delete obj.key` to remove a property entirely — setting to null leaves the key present
 
 **NEVER:**
 1. Declare a variable named `Data`
@@ -1919,6 +1962,7 @@ exit "Processed " + count + " orders"
 15. Declare functions inside `if`, loops, or other functions — they must be top-level
 16. Use `default` in `match` — it doesn't exist; every variant must be handled explicitly
 17. Reuse a variant name across multiple unions — variant names must be globally unique
+18. Use `delete` on a bare variable (`delete myVar`) — it only works on object properties
 
 ---
 
