@@ -922,13 +922,14 @@ var num = RegexMatch(text, "[0-9]+")
 
 ---
 
-## 15. Standard Library — Math Functions (14)
+## 15. Standard Library — Math Functions (15)
 
 | Function | Parameters | Returns | Description |
 |----------|-----------|---------|-------------|
 | `Absolute(n)` | number | number | Absolute value |
 | `Floor(n)` | number | number | Round down |
 | `Ceiling(n)` | number | number | Round up |
+| `Round(value, decimals, mode?)` | number, number[, string] | number | Round to nearest at precision; mode: `"halfUp"` (default), `"halfEven"`, `"halfDown"`; negative decimals round to powers of 10 |
 | `Min(arr)` | array | number or null | Minimum number in array; null if no numbers |
 | `Max(arr)` | array | number or null | Maximum number in array; null if no numbers |
 | `Power(base, exp)` | number, number | number | Exponentiation |
